@@ -198,8 +198,8 @@ class IntradayMarketDigestService:
         sector_leaders = self._get_cn_sector_leaders()
         stock_leaders = self._get_cn_stock_leaders()
         flow_stock_leaders = self._get_cn_flow_stock_leaders()
-        auction_limit_ups = self._get_cn_limit_up_pool(slot, top_n=10, auction_only=True) if slot.stage == "auction" else []
-        daily_limit_ups = self._get_cn_limit_up_pool(slot, top_n=20, auction_only=False) if slot.is_final else []
+        auction_limit_ups = self._get_cn_limit_up_pool(slot, top_n=20, auction_only=True) if slot.stage == "auction" else []
+        daily_limit_ups = self._get_cn_limit_up_pool(slot, top_n=20, auction_only=False) if slot.stage != "auction" else []
         previous_day_comparison = (
             self._build_cn_previous_day_comparison(flow_bundle, sector_leaders, slot.local_date)
             if slot.is_final
@@ -621,14 +621,17 @@ class IntradayMarketDigestService:
             strength = _parse_limit_strength(row.get(strength_col))
             industry = _safe_str(row.get(industry_col))
             first_time = _normalize_time_text(row.get(first_col))
+            fund_value = _safe_float(row.get(fund_col)) if fund_col else None
             reason = self._build_limit_up_reason(
                 stock_name=name,
                 industry=industry,
                 strength=strength,
                 first_time=first_time,
+                fund_value=fund_value,
             )
             value = f"{strength}连板" if strength > 0 else "首板"
-            extra_parts = [part for part in [industry, first_time, reason] if part]
+            fund_text = f"封单/成交确认 {_format_money(fund_value)}" if fund_value is not None else ""
+            extra_parts = [part for part in [industry, first_time, fund_text, reason] if part]
             entries.append(IntradayDigestEntry(name=name, value=value, extra=" | ".join(extra_parts)))
         return entries
 
@@ -639,14 +642,24 @@ class IntradayMarketDigestService:
         industry: str,
         strength: int,
         first_time: str,
+        fund_value: Optional[float],
     ) -> str:
         parts: List[str] = []
         if industry:
-            parts.append(f"{industry}主线带动")
-        if strength >= 2:
-            parts.append("连板情绪延续")
-        if first_time and first_time <= "09:30":
-            parts.append("竞价资金一致性较强")
+            parts.append(f"{industry}主线获得资金回流")
+        if strength >= 3:
+            parts.append("连板高度继续抬升，短线情绪强化")
+        elif strength == 2:
+            parts.append("二连板延续，说明接力承接仍在")
+        if first_time:
+            if first_time <= "09:30":
+                parts.append("较早封板，显示竞价与早盘资金一致性较强")
+            elif first_time <= "11:30":
+                parts.append("上午快速封板，盘中增量资金跟进积极")
+            else:
+                parts.append("午后封板，体现资金回流和板块扩散")
+        if fund_value is not None and abs(fund_value) > 0:
+            parts.append(f"封单或成交确认 {_format_money(fund_value)}，强化了封板质量")
         return "，".join(parts) if parts else f"{stock_name} 主要受短线资金和情绪驱动"
 
     def _get_us_spot_frame(self) -> Optional[pd.DataFrame]:
@@ -840,7 +853,7 @@ class IntradayMarketDigestService:
     def _build_llm_enrichment_prompt(self, context: IntradayDigestContext) -> str:
         sector_lines = "\n".join(f"- {item.name}: {item.value}; {item.extra}" for item in context.sector_leaders[:6]) or "- 无"
         stock_lines = "\n".join(f"- {item.name}: {item.value}; {item.extra}" for item in context.stock_leaders[:8]) or "- 无"
-        auction_lines = "\n".join(f"- {item.name}: {item.value}; {item.extra}" for item in context.auction_limit_ups[:10]) or "- 无"
+        auction_lines = "\n".join(f"- {item.name}: {item.value}; {item.extra}" for item in context.auction_limit_ups[:20]) or "- 无"
         limit_lines = "\n".join(f"- {item.name}: {item.value}; {item.extra}" for item in context.daily_limit_ups[:20]) or "- 无"
         news_lines = "\n".join(f"- {item}" for item in context.news_highlights[:5]) or "- 无"
         return f"""你是一位专业市场复盘助手。请基于以下结构化信息，输出详细但克制的中文段落，避免空话和口号。

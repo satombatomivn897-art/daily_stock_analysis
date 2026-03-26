@@ -341,6 +341,30 @@ class TestEmailSender(unittest.TestCase):
         self.assertIsInstance(pdf_bytes, bytes)
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
 
+    def test_parse_pdf_report_structure_extracts_meta_and_sections(self):
+        cfg = _config(
+            email_sender="a@qq.com",
+            email_password="p",
+            email_receivers=["b@qq.com"],
+            email_attachment_format="pdf",
+        )
+        sender = EmailSender(cfg)
+
+        report = sender._parse_pdf_report_structure(
+            "## 2026-03-26 A股10:30 盘中综述\n\n"
+            "> 汇总时点: 10:30 | 实际生成时间: 2026-03-26 10:31 | 手动指定时点\n\n"
+            "### 一、核心结论\n"
+            "资金继续聚焦机器人与算力主线。\n\n"
+            "### 六、涨停追踪\n"
+            "#### 当前涨停 Top 20\n"
+            "1. **龙头股份**: 3连板 | 机器人 | 09:31 | 机器人主线带动\n"
+        )
+
+        self.assertEqual(report["title"], "2026-03-26 A股10:30 盘中综述")
+        self.assertEqual(report["meta_items"][0], "汇总时点: 10:30")
+        self.assertEqual(report["summary"], "资金继续聚焦机器人与算力主线。")
+        self.assertEqual(report["sections"][1]["title"], "六、涨停追踪")
+
 
 class TestAstrbotSender(unittest.TestCase):
     """Unit tests for AstrbotSender."""

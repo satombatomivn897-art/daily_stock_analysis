@@ -49,6 +49,27 @@ def _render_entry_list(entries: List[IntradayDigestEntry]) -> List[str]:
     return lines
 
 
+def _extract_entry_reason(entry: IntradayDigestEntry) -> str:
+    if not entry.extra:
+        return "主要由短线资金回流和情绪强化共同驱动。"
+    segments = [segment.strip() for segment in entry.extra.split("|") if segment.strip()]
+    if not segments:
+        return "主要由短线资金回流和情绪强化共同驱动。"
+    tail = segments[-1]
+    if any(keyword in tail for keyword in ("带动", "驱动", "催化", "一致性", "承接", "强化", "回流")):
+        return tail
+    if len(segments) >= 2:
+        return "；".join(segments[-2:])
+    return f"主要受{tail}方向活跃和短线资金推动。"
+
+
+def _render_reason_list(entries: List[IntradayDigestEntry]) -> List[str]:
+    lines: List[str] = []
+    for index, entry in enumerate(entries, 1):
+        lines.append(f"{index}. **{entry.name}**: {_extract_entry_reason(entry)}")
+    return lines
+
+
 def render_intraday_digest_markdown(context: IntradayDigestContext) -> str:
     """Render a detailed markdown report for email / PDF delivery."""
 
@@ -88,24 +109,32 @@ def render_intraday_digest_markdown(context: IntradayDigestContext) -> str:
     if slot.region == "cn" and slot.stage == "auction":
         lines.append("### 六、集合竞价观察")
         if context.auction_limit_ups:
-            lines.extend(["#### 竞价涨停 Top 10", *_render_entry_list(context.auction_limit_ups)])
-        else:
-            lines.append("暂无竞价涨停名单。")
-        lines.append("")
-    elif slot.region == "cn" and slot.is_final:
-        lines.append("### 六、涨停复盘")
-        if context.daily_limit_ups:
             lines.extend(
                 [
-                    "#### 当日涨停 Top 20",
-                    *_render_entry_list(context.daily_limit_ups),
+                    "#### 竞价涨停 Top 20",
+                    *_render_entry_list(context.auction_limit_ups),
                     "",
-                    "#### 涨停原因简析",
-                    "结合行业催化、资金共振、连板结构与新闻事件，逐只解释强势封板的主要驱动。",
+                    "#### 竞价涨停原因简析",
+                    *_render_reason_list(context.auction_limit_ups),
                 ]
             )
         else:
-            lines.append("暂无当日涨停复盘数据。")
+            lines.append("暂无竞价涨停名单。")
+        lines.append("")
+    elif slot.region == "cn":
+        lines.append("### 六、涨停复盘" if slot.is_final else "### 六、涨停追踪")
+        if context.daily_limit_ups:
+            lines.extend(
+                [
+                    "#### 当前涨停 Top 20" if not slot.is_final else "#### 当日涨停 Top 20",
+                    *_render_entry_list(context.daily_limit_ups),
+                    "",
+                    "#### 涨停原因简析",
+                    *_render_reason_list(context.daily_limit_ups),
+                ]
+            )
+        else:
+            lines.append("暂无涨停追踪数据。")
         lines.append("")
 
     if context.news_highlights:

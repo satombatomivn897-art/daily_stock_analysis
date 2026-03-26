@@ -42,11 +42,37 @@ class IntradayMarketDigestRenderTestCase(unittest.TestCase):
         )
 
         self.assertIn("集合竞价观察", report)
-        self.assertIn("竞价涨停 Top 10", report)
+        self.assertIn("竞价涨停 Top 20", report)
+        self.assertIn("竞价涨停原因简析", report)
         self.assertNotIn("当日涨停 Top 20", report)
         self.assertIn("汇总时点: 09:30", report)
         self.assertIn("实际生成时间: 2026-03-26 12:21", report)
         self.assertIn("手动指定时点", report)
+
+    def test_cn_intraday_digest_includes_current_limit_up_top_20(self) -> None:
+        slot = IntradayMarketSlot(
+            region="cn",
+            label="10:30",
+            stage="intraday",
+            market_name="A股",
+            local_date="2026-03-26",
+            timezone_name="Asia/Shanghai",
+            is_final=False,
+        )
+        report = render_intraday_digest_markdown(
+            IntradayDigestContext(
+                slot=slot,
+                generated_at="2026-03-26 10:31",
+                headline="盘中资金继续围绕算力和机器人主线扩散。",
+                capital_flow_summary="主力净流入仍偏向科技和高弹性题材。",
+                daily_limit_ups=[
+                    IntradayDigestEntry(name="盘中涨停股", value="2 连板", extra="机器人主线带动"),
+                ],
+            )
+        )
+
+        self.assertIn("当前涨停 Top 20", report)
+        self.assertIn("涨停原因简析", report)
 
     def test_cn_close_digest_includes_daily_limit_up_reason_section(self) -> None:
         slot = IntradayMarketSlot(

@@ -8,7 +8,7 @@ Email 发送提醒服务
 import logging
 import re
 from io import BytesIO
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from html import escape
 from email.mime.text import MIMEText
@@ -187,15 +187,82 @@ class EmailSender:
             blocks.append(("body", self._strip_markdown_for_pdf(stripped)))
         return blocks
 
+    def _parse_pdf_report_structure(self, content: str) -> Dict[str, Any]:
+        structure: Dict[str, Any] = {
+            "title": "",
+            "meta_items": [],
+            "summary": "",
+            "sections": [],
+            "disclaimer": "",
+        }
+        current_section: Optional[Dict[str, Any]] = None
+
+        for block_type, block_text in self._build_pdf_blocks(content):
+            if not block_text and block_type != "spacer":
+                continue
+            if block_type in {"title", "heading2"} and not structure["title"]:
+                structure["title"] = block_text
+                continue
+            if block_type == "quote":
+                structure["meta_items"] = [item.strip() for item in block_text.split("|") if item.strip()]
+                continue
+            if block_type == "heading3":
+                current_section = {"title": block_text, "blocks": []}
+                structure["sections"].append(current_section)
+                continue
+            if current_section is None:
+                continue
+            current_section["blocks"].append((block_type, block_text))
+
+        for section in structure["sections"]:
+            if "核心结论" in section["title"] and not structure["summary"]:
+                structure["summary"] = self._flatten_pdf_blocks(section["blocks"])
+            if "提示" in section["title"] and not structure["disclaimer"]:
+                structure["disclaimer"] = self._flatten_pdf_blocks(section["blocks"])
+
+        if structure["disclaimer"]:
+            structure["sections"] = [
+                section for section in structure["sections"] if "提示" not in section["title"]
+            ]
+
+        if not structure["title"]:
+            structure["title"] = "股票智能分析报告"
+        return structure
+
+    @staticmethod
+    def _flatten_pdf_blocks(blocks: List[Tuple[str, str]]) -> str:
+        lines: List[str] = []
+        for block_type, block_text in blocks:
+            if not block_text or block_type in {"spacer", "rule"}:
+                continue
+            lines.append(block_text)
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _split_pdf_meta_item(item: str) -> Tuple[str, str]:
+        if ":" in item:
+            label, value = item.split(":", 1)
+            return label.strip(), value.strip()
+        return "说明", item.strip()
+
     def _build_pdf_attachment(self, content: str) -> Optional[bytes]:
-        """Build a readable PDF attachment for email delivery."""
+        """Build a formal research-style PDF attachment for email delivery."""
         try:
             from reportlab.lib import colors
             from reportlab.lib.pagesizes import A4
+            from reportlab.lib.enums import TA_CENTER
             from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+            from reportlab.lib.units import mm
             from reportlab.pdfbase.cidfonts import UnicodeCIDFont
             from reportlab.pdfbase import pdfmetrics
-            from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
+            from reportlab.platypus import (
+                HRFlowable,
+                Paragraph,
+                SimpleDocTemplate,
+                Spacer,
+                Table,
+                TableStyle,
+            )
         except ImportError:
             logger.warning("reportlab not installed, PDF attachment disabled")
             return None
@@ -209,61 +276,70 @@ class EmailSender:
             pass
 
         safe_content = self._normalize_text_for_pdf(content)
-        blocks = self._build_pdf_blocks(safe_content)
+        report = self._parse_pdf_report_structure(safe_content)
         document = SimpleDocTemplate(
             pdf_buffer,
             pagesize=A4,
-            leftMargin=42,
-            rightMargin=42,
-            topMargin=42,
-            bottomMargin=42,
-            title="股票智能分析报告",
+            leftMargin=18 * mm,
+            rightMargin=18 * mm,
+            topMargin=22 * mm,
+            bottomMargin=18 * mm,
+            title=report["title"],
             author=self._email_config.get('sender_name') or 'daily_stock_analysis',
             subject="daily_stock_analysis 邮件报告附件",
         )
 
         styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            "PdfTitle",
+        cover_kicker_style = ParagraphStyle(
+            "PdfCoverKicker",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=9.5,
+            leading=12,
+            textColor=colors.HexColor("#dbeafe"),
+            alignment=TA_CENTER,
+            wordWrap="CJK",
+        )
+        cover_title_style = ParagraphStyle(
+            "PdfCoverTitle",
             parent=styles["Title"],
             fontName=font_name,
-            fontSize=18,
-            leading=24,
-            textColor=colors.HexColor("#111827"),
-            spaceAfter=12,
+            fontSize=20,
+            leading=27,
+            textColor=colors.white,
+            alignment=TA_CENTER,
             wordWrap="CJK",
         )
-        heading2_style = ParagraphStyle(
-            "PdfHeading2",
-            parent=styles["Heading2"],
+        cover_meta_style = ParagraphStyle(
+            "PdfCoverMeta",
+            parent=styles["BodyText"],
             fontName=font_name,
-            fontSize=14,
-            leading=20,
-            textColor=colors.HexColor("#0f172a"),
-            spaceBefore=8,
-            spaceAfter=6,
+            fontSize=9.5,
+            leading=13,
+            textColor=colors.HexColor("#e2e8f0"),
+            alignment=TA_CENTER,
             wordWrap="CJK",
         )
-        heading3_style = ParagraphStyle(
-            "PdfHeading3",
+        section_title_style = ParagraphStyle(
+            "PdfSectionTitle",
             parent=styles["Heading3"],
             fontName=font_name,
             fontSize=12.5,
             leading=18,
-            textColor=colors.HexColor("#1f2937"),
-            spaceBefore=6,
-            spaceAfter=4,
+            textColor=colors.HexColor("#0f172a"),
+            spaceBefore=0,
+            spaceAfter=0,
             wordWrap="CJK",
         )
-        heading4_style = ParagraphStyle(
-            "PdfHeading4",
+        subsection_style = ParagraphStyle(
+            "PdfSubsection",
             parent=styles["Heading4"],
             fontName=font_name,
-            fontSize=11.5,
-            leading=17,
-            textColor=colors.HexColor("#374151"),
-            spaceBefore=4,
-            spaceAfter=3,
+            fontSize=10.8,
+            leading=15,
+            textColor=colors.HexColor("#1d4ed8"),
+            spaceBefore=5,
+            spaceAfter=4,
             wordWrap="CJK",
         )
         body_style = ParagraphStyle(
@@ -271,53 +347,235 @@ class EmailSender:
             parent=styles["BodyText"],
             fontName=font_name,
             fontSize=10.5,
-            leading=17,
+            leading=18,
             textColor=colors.HexColor("#111827"),
-            spaceAfter=3,
+            spaceAfter=5,
             wordWrap="CJK",
-        )
-        quote_style = ParagraphStyle(
-            "PdfQuote",
-            parent=body_style,
-            leftIndent=12,
-            textColor=colors.HexColor("#374151"),
-            borderPadding=4,
         )
         list_style = ParagraphStyle(
             "PdfList",
             parent=body_style,
+            leftIndent=12,
+            firstLineIndent=-8,
+        )
+        quote_style = ParagraphStyle(
+            "PdfQuote",
+            parent=body_style,
             leftIndent=10,
+            textColor=colors.HexColor("#334155"),
+        )
+        meta_label_style = ParagraphStyle(
+            "PdfMetaLabel",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=8.8,
+            leading=12,
+            textColor=colors.HexColor("#64748b"),
+            wordWrap="CJK",
+        )
+        meta_value_style = ParagraphStyle(
+            "PdfMetaValue",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=9.4,
+            leading=13,
+            textColor=colors.HexColor("#0f172a"),
+            wordWrap="CJK",
+        )
+        summary_title_style = ParagraphStyle(
+            "PdfSummaryTitle",
+            parent=styles["Heading4"],
+            fontName=font_name,
+            fontSize=10.5,
+            leading=14,
+            textColor=colors.HexColor("#1e3a8a"),
+            wordWrap="CJK",
+        )
+        summary_body_style = ParagraphStyle(
+            "PdfSummaryBody",
+            parent=body_style,
+            fontName=font_name,
+            fontSize=10.2,
+            leading=17,
+            textColor=colors.HexColor("#0f172a"),
+            wordWrap="CJK",
+        )
+        disclaimer_style = ParagraphStyle(
+            "PdfDisclaimer",
+            parent=body_style,
+            fontName=font_name,
+            fontSize=9.2,
+            leading=14,
+            textColor=colors.HexColor("#475569"),
+            wordWrap="CJK",
         )
 
         style_map = {
-            "title": title_style,
-            "heading2": heading2_style,
-            "heading3": heading3_style,
-            "heading4": heading4_style,
             "body": body_style,
             "bullet": list_style,
             "list": list_style,
             "quote": quote_style,
+            "heading4": subsection_style,
         }
 
         story = []
-        for block_type, block_text in blocks:
-            if block_type == "spacer":
-                story.append(Spacer(1, 6))
-                continue
-            if block_type == "rule":
-                story.append(Spacer(1, 4))
-                story.append(HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#d1d5db")))
-                story.append(Spacer(1, 6))
-                continue
-            if not block_text:
-                continue
-            story.append(Paragraph(escape(block_text), style_map[block_type]))
+        meta_text = " | ".join(report["meta_items"]) if report["meta_items"] else datetime.now().strftime("%Y-%m-%d %H:%M")
+        cover_table = Table(
+            [
+                [Paragraph("daily_stock_analysis 市场跟踪研报", cover_kicker_style)],
+                [Paragraph(escape(report["title"]), cover_title_style)],
+                [Paragraph(escape(meta_text), cover_meta_style)],
+            ],
+            colWidths=[document.width],
+        )
+        cover_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#0f172a")),
+                    ("BOX", (0, 0), (-1, -1), 0, colors.white),
+                    ("TOPPADDING", (0, 0), (-1, -1), 12),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ]
+            )
+        )
+        story.extend([cover_table, Spacer(1, 10)])
+
+        if report["meta_items"]:
+            meta_pairs = [self._split_pdf_meta_item(item) for item in report["meta_items"]]
+            meta_rows = []
+            for index in range(0, len(meta_pairs), 2):
+                left_label, left_value = meta_pairs[index]
+                if index + 1 < len(meta_pairs):
+                    right_label, right_value = meta_pairs[index + 1]
+                else:
+                    right_label, right_value = "", ""
+                meta_rows.append(
+                    [
+                        Paragraph(escape(left_label), meta_label_style),
+                        Paragraph(escape(left_value), meta_value_style),
+                        Paragraph(escape(right_label), meta_label_style) if right_label else "",
+                        Paragraph(escape(right_value), meta_value_style) if right_value else "",
+                    ]
+                )
+
+            meta_table = Table(
+                meta_rows,
+                colWidths=[20 * mm, (document.width - 40 * mm) / 2, 20 * mm, (document.width - 40 * mm) / 2],
+            )
+            meta_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+                        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cbd5e1")),
+                        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                        ("TOPPADDING", (0, 0), (-1, -1), 7),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ]
+                )
+            )
+            story.extend([meta_table, Spacer(1, 10)])
+
+        if report["summary"]:
+            summary_table = Table(
+                [
+                    [Paragraph("执行摘要", summary_title_style)],
+                    [Paragraph(escape(report["summary"]).replace("\n", "<br/>"), summary_body_style)],
+                ],
+                colWidths=[document.width],
+            )
+            summary_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dbeafe")),
+                        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#eff6ff")),
+                        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#93c5fd")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                        ("TOPPADDING", (0, 0), (-1, -1), 8),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ]
+                )
+            )
+            story.extend([summary_table, Spacer(1, 12)])
+
+        for section in report["sections"]:
+            section_header = Table(
+                [[Paragraph(escape(section["title"]), section_title_style)]],
+                colWidths=[document.width],
+            )
+            section_header.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
+                        ("LINEBEFORE", (0, 0), (0, -1), 3, colors.HexColor("#1d4ed8")),
+                        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                        ("TOPPADDING", (0, 0), (-1, -1), 8),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ]
+                )
+            )
+
+            section_story = [section_header, Spacer(1, 8)]
+            for block_type, block_text in section["blocks"]:
+                if block_type == "spacer":
+                    section_story.append(Spacer(1, 5))
+                    continue
+                if block_type == "rule":
+                    section_story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#d1d5db")))
+                    section_story.append(Spacer(1, 5))
+                    continue
+                if not block_text:
+                    continue
+                style = style_map.get(block_type, body_style)
+                section_story.append(Paragraph(escape(block_text).replace("\n", "<br/>"), style))
+            story.extend(section_story)
+            story.append(Spacer(1, 10))
+
+        if report["disclaimer"]:
+            disclaimer_table = Table(
+                [[Paragraph(escape(report["disclaimer"]).replace("\n", "<br/>"), disclaimer_style)]],
+                colWidths=[document.width],
+            )
+            disclaimer_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+                        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cbd5e1")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                        ("TOPPADDING", (0, 0), (-1, -1), 8),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ]
+                )
+            )
+            story.append(disclaimer_table)
 
         if not story:
             story.append(Paragraph("暂无可用报告内容。", body_style))
 
-        document.build(story)
+        page_width, page_height = A4
+
+        def _draw_page(canvas, doc):
+            canvas.saveState()
+            canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
+            canvas.setFillColor(colors.HexColor("#64748b"))
+            canvas.setFont(font_name, 8.5)
+            canvas.drawString(doc.leftMargin, page_height - 12 * mm, "daily_stock_analysis | 正式市场跟踪研报")
+            canvas.drawRightString(page_width - doc.rightMargin, page_height - 12 * mm, datetime.now().strftime("%Y-%m-%d"))
+            canvas.line(doc.leftMargin, page_height - 13.5 * mm, page_width - doc.rightMargin, page_height - 13.5 * mm)
+            canvas.line(doc.leftMargin, 10 * mm, page_width - doc.rightMargin, 10 * mm)
+            canvas.drawString(doc.leftMargin, 6 * mm, "仅供研究与复盘参考，不构成任何投资建议。")
+            canvas.drawRightString(page_width - doc.rightMargin, 6 * mm, f"第 {canvas.getPageNumber()} 页")
+            canvas.restoreState()
+
+        document.build(story, onFirstPage=_draw_page, onLaterPages=_draw_page)
         return pdf_buffer.getvalue()
 
     def _attach_pdf_if_needed(self, msg: MIMEMultipart, markdown_content: Optional[str]) -> None:
