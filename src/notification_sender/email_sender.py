@@ -6,11 +6,13 @@ Email 发送提醒服务
 1. 通过 SMTP 发送 Email 消息
 """
 import logging
+from io import BytesIO
 from typing import Optional, List
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
+from email.mime.application import MIMEApplication
 from email.header import Header
 from email.utils import formataddr
 import smtplib
@@ -61,6 +63,7 @@ class EmailSender:
             'sender_name': getattr(config, 'email_sender_name', 'daily_stock_analysis股票分析助手'),
             'password': config.email_password,
             'receivers': config.email_receivers or ([config.email_sender] if config.email_sender else []),
+            'attachment_format': getattr(config, 'email_attachment_format', 'none'),
         }
         self._stock_email_groups = getattr(config, 'stock_email_groups', None) or []
         
@@ -109,6 +112,103 @@ class EmailSender:
         """Encode display name safely so non-ASCII sender names work across SMTP providers."""
         sender_name = self._email_config.get('sender_name') or '股票分析助手'
         return formataddr((str(Header(str(sender_name), 'utf-8')), sender))
+
+    def _should_attach_pdf(self) -> bool:
+        return (self._email_config.get('attachment_format') or 'none') == 'pdf'
+
+    @staticmethod
+    def _normalize_text_for_pdf(content: str) -> str:
+        normalized_chars: List[str] = []
+        for ch in (content or "").replace('\r\n', '\n').replace('\r', '\n'):
+            if ch in {'\n', '\t'}:
+                normalized_chars.append(ch)
+                continue
+            if ord(ch) < 32:
+                continue
+            if ord(ch) > 0xFFFF:
+                normalized_chars.append('?')
+                continue
+            normalized_chars.append(ch)
+        return ''.join(normalized_chars).replace('\t', '    ')
+
+    @staticmethod
+    def _wrap_pdf_line(text: str, max_width: float, font_name: str, font_size: int) -> List[str]:
+        from reportlab.pdfbase import pdfmetrics
+
+        if not text:
+            return [""]
+
+        lines: List[str] = []
+        current = ""
+        for ch in text:
+            candidate = f"{current}{ch}"
+            if current and pdfmetrics.stringWidth(candidate, font_name, font_size) > max_width:
+                lines.append(current)
+                current = ch
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        return lines or [""]
+
+    def _build_pdf_attachment(self, content: str) -> Optional[bytes]:
+        """Build a simple text-based PDF attachment for email delivery."""
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+            from reportlab.pdfgen import canvas
+        except ImportError:
+            logger.warning("reportlab not installed, PDF attachment disabled")
+            return None
+
+        pdf_buffer = BytesIO()
+        page_width, page_height = A4
+        margin = 40
+        font_name = "STSong-Light"
+        font_size = 11
+        line_height = 16
+        max_width = page_width - margin * 2
+
+        try:
+            pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+        except Exception:
+            # ReportLab may raise if the font has already been registered.
+            pass
+
+        safe_content = self._normalize_text_for_pdf(content)
+        pdf = canvas.Canvas(pdf_buffer, pagesize=A4)
+        pdf.setTitle("股票智能分析报告")
+        pdf.setAuthor(self._email_config.get('sender_name') or 'daily_stock_analysis')
+        pdf.setSubject("daily_stock_analysis 邮件报告附件")
+        pdf.setFont(font_name, font_size)
+
+        y = page_height - margin
+        for paragraph in safe_content.split('\n'):
+            for line in self._wrap_pdf_line(paragraph, max_width, font_name, font_size):
+                if y < margin:
+                    pdf.showPage()
+                    pdf.setFont(font_name, font_size)
+                    y = page_height - margin
+                pdf.drawString(margin, y, line)
+                y -= line_height
+            y -= 4
+
+        pdf.save()
+        return pdf_buffer.getvalue()
+
+    def _attach_pdf_if_needed(self, msg: MIMEMultipart, markdown_content: Optional[str]) -> None:
+        if not self._should_attach_pdf() or not markdown_content:
+            return
+
+        pdf_bytes = self._build_pdf_attachment(markdown_content)
+        if not pdf_bytes:
+            logger.warning("PDF 附件生成失败，回退为普通邮件正文发送")
+            return
+
+        pdf_part = MIMEApplication(pdf_bytes, _subtype='pdf')
+        pdf_part.add_header('Content-Disposition', 'attachment', filename='stock-analysis-report.pdf')
+        msg.attach(pdf_part)
 
     @staticmethod
     def _close_server(server: Optional[smtplib.SMTP]) -> None:
@@ -170,6 +270,7 @@ class EmailSender:
             html_part = MIMEText(html_content, 'html', 'utf-8')
             msg.attach(text_part)
             msg.attach(html_part)
+            self._attach_pdf_if_needed(msg, content)
             
             # 自动识别 SMTP 配置
             domain = sender.split('@')[-1].lower()
@@ -215,7 +316,10 @@ class EmailSender:
             self._close_server(server)
 
     def _send_email_with_inline_image(
-        self, image_bytes: bytes, receivers: Optional[List[str]] = None
+        self,
+        image_bytes: bytes,
+        receivers: Optional[List[str]] = None,
+        markdown_content: Optional[str] = None,
     ) -> bool:
         """Send email with inline image attachment (Issue #289)."""
         if not self._is_email_configured():
@@ -245,6 +349,7 @@ class EmailSender:
             img_part.add_header('Content-Disposition', 'inline', filename='report.png')
             img_part.add_header('Content-ID', '<report-image>')
             msg.attach(img_part)
+            self._attach_pdf_if_needed(msg, markdown_content)
 
             domain = sender.split('@')[-1].lower()
             smtp_config = SMTP_CONFIGS.get(domain)

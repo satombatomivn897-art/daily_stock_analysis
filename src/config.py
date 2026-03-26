@@ -549,6 +549,7 @@ class Config:
     email_sender_name: str = "daily_stock_analysis股票分析助手"  # 发件人显示名称
     email_password: Optional[str] = None  # 邮箱密码/授权码
     email_receivers: List[str] = field(default_factory=list)  # 收件人列表（留空则发给自己）
+    email_attachment_format: str = "none"  # 邮件附件格式：none / pdf
 
     # Stock-to-email group routing (Issue #268): STOCK_GROUP_N + EMAIL_GROUP_N
     # When configured, each group's report is sent to that group's emails only.
@@ -1177,6 +1178,7 @@ class Config:
             email_sender_name=os.getenv('EMAIL_SENDER_NAME', 'daily_stock_analysis股票分析助手'),
             email_password=os.getenv('EMAIL_PASSWORD'),
             email_receivers=[r.strip() for r in os.getenv('EMAIL_RECEIVERS', '').split(',') if r.strip()],
+            email_attachment_format=cls._parse_email_attachment_format(os.getenv('EMAIL_ATTACHMENT_FORMAT', 'none')),
             stock_email_groups=cls._parse_stock_email_groups(),
             pushover_user_key=os.getenv('PUSHOVER_USER_KEY'),
             pushover_api_token=os.getenv('PUSHOVER_API_TOKEN'),
@@ -1718,6 +1720,19 @@ class Config:
                 "(valid: wkhtmltoimage | markdown-to-file)"
             )
         return 'wkhtmltoimage'
+
+    @classmethod
+    def _parse_email_attachment_format(cls, value: Optional[str]) -> str:
+        """Parse EMAIL_ATTACHMENT_FORMAT, fallback to none for invalid values."""
+        v = (value or 'none').strip().lower()
+        if v in ('none', 'pdf'):
+            return v
+        if v:
+            logging.getLogger(__name__).warning(
+                "EMAIL_ATTACHMENT_FORMAT '%s' invalid, fallback to 'none' (valid: none | pdf)",
+                value,
+            )
+        return 'none'
 
     @classmethod
     def _resolve_realtime_source_priority(cls) -> str:

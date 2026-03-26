@@ -194,6 +194,25 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(config.max_workers, 3)
         self.assertEqual(config.webui_port, 8000)
 
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_load_from_env_reads_email_attachment_format(
+        self,
+        _mock_parse_litellm_yaml,
+        _mock_setup_env,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+                "EMAIL_ATTACHMENT_FORMAT": "pdf",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.email_attachment_format, "pdf")
+
 
 if __name__ == "__main__":
     unittest.main()

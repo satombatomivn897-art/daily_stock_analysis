@@ -59,6 +59,7 @@ lxml_html_clean             # Fix for lxml.html.clean ImportError in newer lxml 
 
 # 报告模板引擎（Report Engine P0）
 jinja2>=3.1.0               # Jinja2 template engine for report rendering
+reportlab>=4.0.0            # PDF attachment generation for email reports
 
 # FastAPI Web 框架
 fastapi>=0.109.0            # 现代 Python Web 框架

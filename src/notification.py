@@ -1647,7 +1647,9 @@ class NotificationService(
                         receivers = self.get_receivers_for_stocks(email_stock_codes)
                     if use_image:
                         result = self._send_email_with_inline_image(
-                            image_bytes, receivers=receivers
+                            image_bytes,
+                            receivers=receivers,
+                            markdown_content=content,
                         )
                     else:
                         result = self.send_to_email(content, receivers=receivers)

@@ -283,6 +283,48 @@ class TestEmailSender(unittest.TestCase):
         )
         server.quit.assert_called_once()
 
+    @mock.patch("smtplib.SMTP_SSL")
+    def test_send_to_email_attaches_pdf_when_enabled(self, mock_smtp_ssl):
+        cfg = _config(
+            email_sender="a@qq.com",
+            email_password="p",
+            email_receivers=["b@qq.com"],
+            email_attachment_format="pdf",
+        )
+        sender = EmailSender(cfg)
+
+        with mock.patch.object(sender, "_build_pdf_attachment", return_value=b"%PDF-1.4\nmock\n"):
+            result = sender.send_to_email("body", subject="测试主题")
+
+        self.assertTrue(result)
+        msg = mock_smtp_ssl.return_value.send_message.call_args[0][0]
+        pdf_parts = [part for part in msg.walk() if part.get_content_type() == "application/pdf"]
+        self.assertEqual(len(pdf_parts), 1)
+        self.assertEqual(pdf_parts[0].get_filename(), "stock-analysis-report.pdf")
+
+    @mock.patch("smtplib.SMTP_SSL")
+    def test_send_image_email_attaches_pdf_when_enabled(self, mock_smtp_ssl):
+        cfg = _config(
+            email_sender="a@qq.com",
+            email_password="p",
+            email_receivers=["b@qq.com"],
+            email_attachment_format="pdf",
+        )
+        sender = EmailSender(cfg)
+
+        with mock.patch.object(sender, "_build_pdf_attachment", return_value=b"%PDF-1.4\nmock\n"):
+            result = sender._send_email_with_inline_image(
+                b"PNG_BYTES",
+                receivers=["b@qq.com"],
+                markdown_content="report body",
+            )
+
+        self.assertTrue(result)
+        msg = mock_smtp_ssl.return_value.send_message.call_args[0][0]
+        pdf_parts = [part for part in msg.walk() if part.get_content_type() == "application/pdf"]
+        self.assertEqual(len(pdf_parts), 1)
+        self.assertEqual(pdf_parts[0].get_filename(), "stock-analysis-report.pdf")
+
 
 class TestAstrbotSender(unittest.TestCase):
     """Unit tests for AstrbotSender."""
