@@ -245,6 +245,49 @@ class EmailSender:
             return label.strip(), value.strip()
         return "说明", item.strip()
 
+    @staticmethod
+    def _truncate_pdf_text(text: str, limit: int = 56) -> str:
+        normalized = re.sub(r"\s+", " ", (text or "").strip())
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[: max(limit - 1, 1)].rstrip() + "…"
+
+    def _extract_pdf_section_text(self, report: Dict[str, Any], keyword: str) -> str:
+        for section in report.get("sections", []):
+            if keyword in section.get("title", ""):
+                return self._flatten_pdf_blocks(section.get("blocks", []))
+        return ""
+
+    def _infer_pdf_report_type(self, title: str) -> str:
+        clean_title = title or ""
+        if "收盘综述" in clean_title:
+            return "A股收盘复盘"
+        if "09:30" in clean_title:
+            return "A股开盘跟踪"
+        if "盘中综述" in clean_title:
+            return "A股盘中跟踪"
+        return "A股市场简报"
+
+    def _build_pdf_briefing_items(self, report: Dict[str, Any]) -> List[Tuple[str, str]]:
+        return [
+            ("报告定位", self._infer_pdf_report_type(report.get("title", ""))),
+            ("核心结论", self._truncate_pdf_text(report.get("summary", "") or "暂无核心结论摘要。", limit=62)),
+            (
+                "资金流向",
+                self._truncate_pdf_text(
+                    self._extract_pdf_section_text(report, "资金流向") or "暂无明确资金流向摘要。",
+                    limit=62,
+                ),
+            ),
+            (
+                "投资建议",
+                self._truncate_pdf_text(
+                    self._extract_pdf_section_text(report, "投资方向建议") or "暂无明确投资建议摘要。",
+                    limit=62,
+                ),
+            ),
+        ]
+
     def _build_pdf_attachment(self, content: str) -> Optional[bytes]:
         """Build a formal research-style PDF attachment for email delivery."""
         try:
@@ -318,6 +361,24 @@ class EmailSender:
             leading=13,
             textColor=colors.HexColor("#e2e8f0"),
             alignment=TA_CENTER,
+            wordWrap="CJK",
+        )
+        ribbon_label_style = ParagraphStyle(
+            "PdfRibbonLabel",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=8.6,
+            leading=11,
+            textColor=colors.HexColor("#64748b"),
+            wordWrap="CJK",
+        )
+        ribbon_value_style = ParagraphStyle(
+            "PdfRibbonValue",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=9.6,
+            leading=13,
+            textColor=colors.HexColor("#0f172a"),
             wordWrap="CJK",
         )
         section_title_style = ParagraphStyle(
@@ -400,6 +461,24 @@ class EmailSender:
             textColor=colors.HexColor("#0f172a"),
             wordWrap="CJK",
         )
+        briefing_label_style = ParagraphStyle(
+            "PdfBriefingLabel",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=8.8,
+            leading=11,
+            textColor=colors.HexColor("#1d4ed8"),
+            wordWrap="CJK",
+        )
+        briefing_value_style = ParagraphStyle(
+            "PdfBriefingValue",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=9.7,
+            leading=14,
+            textColor=colors.HexColor("#0f172a"),
+            wordWrap="CJK",
+        )
         disclaimer_style = ParagraphStyle(
             "PdfDisclaimer",
             parent=body_style,
@@ -441,6 +520,34 @@ class EmailSender:
             )
         )
         story.extend([cover_table, Spacer(1, 10)])
+
+        report_type = self._infer_pdf_report_type(report["title"])
+        ribbon_table = Table(
+            [
+                [
+                    Paragraph("报告定位", ribbon_label_style),
+                    Paragraph(escape(report_type), ribbon_value_style),
+                    Paragraph("研究框架", ribbon_label_style),
+                    Paragraph("指数面 / 资金面 / 行业面 / 情绪面 / 涨停追踪", ribbon_value_style),
+                ]
+            ],
+            colWidths=[20 * mm, 35 * mm, 20 * mm, document.width - 75 * mm],
+        )
+        ribbon_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+                    ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cbd5e1")),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]
+            )
+        )
+        story.extend([ribbon_table, Spacer(1, 10)])
 
         if report["meta_items"]:
             meta_pairs = [self._split_pdf_meta_item(item) for item in report["meta_items"]]
@@ -502,6 +609,41 @@ class EmailSender:
                 )
             )
             story.extend([summary_table, Spacer(1, 12)])
+
+        briefing_items = self._build_pdf_briefing_items(report)
+        briefing_rows = []
+        for index in range(0, len(briefing_items), 2):
+            left_label, left_value = briefing_items[index]
+            right_label, right_value = briefing_items[index + 1]
+            briefing_rows.append(
+                [
+                    Paragraph(escape(left_label), briefing_label_style),
+                    Paragraph(escape(left_value), briefing_value_style),
+                    Paragraph(escape(right_label), briefing_label_style),
+                    Paragraph(escape(right_value), briefing_value_style),
+                ]
+            )
+        briefing_table = Table(
+            briefing_rows,
+            colWidths=[18 * mm, (document.width - 36 * mm) / 2, 18 * mm, (document.width - 36 * mm) / 2],
+        )
+        briefing_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
+                    ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#dbe3f0")),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
+                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eff6ff")),
+                    ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#eff6ff")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 9),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+                    ("TOPPADDING", (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ]
+            )
+        )
+        story.extend([briefing_table, Spacer(1, 12)])
 
         for section in report["sections"]:
             section_header = Table(
@@ -567,7 +709,7 @@ class EmailSender:
             canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
             canvas.setFillColor(colors.HexColor("#64748b"))
             canvas.setFont(font_name, 8.5)
-            canvas.drawString(doc.leftMargin, page_height - 12 * mm, "daily_stock_analysis | 正式市场跟踪研报")
+            canvas.drawString(doc.leftMargin, page_height - 12 * mm, f"daily_stock_analysis | {report_type}")
             canvas.drawRightString(page_width - doc.rightMargin, page_height - 12 * mm, datetime.now().strftime("%Y-%m-%d"))
             canvas.line(doc.leftMargin, page_height - 13.5 * mm, page_width - doc.rightMargin, page_height - 13.5 * mm)
             canvas.line(doc.leftMargin, 10 * mm, page_width - doc.rightMargin, 10 * mm)

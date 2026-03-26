@@ -365,6 +365,37 @@ class TestEmailSender(unittest.TestCase):
         self.assertEqual(report["summary"], "资金继续聚焦机器人与算力主线。")
         self.assertEqual(report["sections"][1]["title"], "六、涨停追踪")
 
+    def test_build_pdf_briefing_items_extracts_key_sections(self):
+        cfg = _config(
+            email_sender="a@qq.com",
+            email_password="p",
+            email_receivers=["b@qq.com"],
+            email_attachment_format="pdf",
+        )
+        sender = EmailSender(cfg)
+
+        report = sender._parse_pdf_report_structure(
+            "## 2026-03-26 A股15:00 收盘综述\n\n"
+            "> 汇总时点: 15:00 | 实际生成时间: 2026-03-26 15:01\n\n"
+            "### 一、核心结论\n"
+            "主线资金继续回流机器人和算力，短线情绪维持高位。\n\n"
+            "### 三、资金流向\n"
+            "主力净流入重新集中到科技成长方向，北向资金同步改善。\n\n"
+            "### 八、投资方向建议\n"
+            "优先观察主线龙头分歧后的承接，不宜追高尾盘拉升品种。\n"
+        )
+
+        briefing_items = sender._build_pdf_briefing_items(report)
+
+        self.assertEqual(briefing_items[0][0], "报告定位")
+        self.assertIn("A股收盘复盘", briefing_items[0][1])
+        self.assertEqual(briefing_items[1][0], "核心结论")
+        self.assertIn("主线资金继续回流机器人和算力", briefing_items[1][1])
+        self.assertEqual(briefing_items[2][0], "资金流向")
+        self.assertIn("科技成长方向", briefing_items[2][1])
+        self.assertEqual(briefing_items[3][0], "投资建议")
+        self.assertIn("优先观察主线龙头分歧后的承接", briefing_items[3][1])
+
 
 class TestAstrbotSender(unittest.TestCase):
     """Unit tests for AstrbotSender."""
