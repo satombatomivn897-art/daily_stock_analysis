@@ -277,7 +277,11 @@ def _compute_trading_day_filter(
     return (filtered_codes, effective_region, should_skip_all)
 
 
-def _build_search_service_and_analyzer(config: Config):
+def _build_search_service_and_analyzer(
+    config: Config,
+    *,
+    explicit_search_only: bool = False,
+):
     """Initialize optional search service and analyzer for market-focused modes."""
     from src.analyzer import GeminiAnalyzer
     from src.search_service import SearchService
@@ -285,7 +289,17 @@ def _build_search_service_and_analyzer(config: Config):
     search_service = None
     analyzer = None
 
-    if config.has_search_capability_enabled():
+    has_explicit_search_config = any(
+        [
+            getattr(config, "bocha_api_keys", None),
+            getattr(config, "tavily_api_keys", None),
+            getattr(config, "brave_api_keys", None),
+            getattr(config, "serpapi_keys", None),
+            getattr(config, "minimax_api_keys", None),
+            getattr(config, "searxng_base_urls", None),
+        ]
+    )
+    if config.has_search_capability_enabled() and (not explicit_search_only or has_explicit_search_config):
         search_service = SearchService(
             bocha_keys=config.bocha_api_keys,
             tavily_keys=config.tavily_api_keys,
@@ -316,7 +330,10 @@ def run_intraday_market_digest_mode(config: Config, args: argparse.Namespace) ->
 
     logger.info("模式: 盘中大盘综述")
     notifier = NotificationService()
-    search_service, analyzer = _build_search_service_and_analyzer(config)
+    search_service, analyzer = _build_search_service_and_analyzer(
+        config,
+        explicit_search_only=True,
+    )
     reports = run_intraday_market_digest(
         notifier=notifier,
         analyzer=analyzer,
