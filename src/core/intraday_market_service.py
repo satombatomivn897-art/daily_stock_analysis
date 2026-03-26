@@ -9,6 +9,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -144,8 +145,11 @@ class IntradayMarketDigestService:
             return []
 
         reports: List[str] = []
+        slot_origin = "manual" if slot_override != "auto" else "auto"
         for slot in slots:
             context = self._build_context(slot)
+            context.slot_origin = slot_origin
+            context.generated_at = datetime.now(ZoneInfo(slot.timezone_name)).strftime("%Y-%m-%d %H:%M")
             report = self._generate_report(context)
             filename = self._report_filename(slot)
             self.notifier.save_report_to_file(report, filename)

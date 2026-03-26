@@ -6,9 +6,11 @@ Email 发送提醒服务
 1. 通过 SMTP 发送 Email 消息
 """
 import logging
+import re
 from io import BytesIO
 from typing import Optional, List
 from datetime import datetime
+from html import escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
@@ -132,69 +134,190 @@ class EmailSender:
         return ''.join(normalized_chars).replace('\t', '    ')
 
     @staticmethod
-    def _wrap_pdf_line(text: str, max_width: float, font_name: str, font_size: int) -> List[str]:
-        from reportlab.pdfbase import pdfmetrics
+    def _strip_markdown_for_pdf(text: str) -> str:
+        cleaned = text or ""
+        cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+        cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+        cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
+        cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+        cleaned = re.sub(r"_([^_]+)_", r"\1", cleaned)
+        cleaned = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", cleaned)
+        cleaned = re.sub(
+            "["
+            "\U0001F300-\U0001F6FF"
+            "\U0001F900-\U0001FAFF"
+            "\U00002600-\U000027BF"
+            "]+",
+            "",
+            cleaned,
+        )
+        return cleaned.strip()
 
-        if not text:
-            return [""]
-
-        lines: List[str] = []
-        current = ""
-        for ch in text:
-            candidate = f"{current}{ch}"
-            if current and pdfmetrics.stringWidth(candidate, font_name, font_size) > max_width:
-                lines.append(current)
-                current = ch
-            else:
-                current = candidate
-        if current:
-            lines.append(current)
-        return lines or [""]
+    def _build_pdf_blocks(self, content: str) -> List[tuple]:
+        blocks: List[tuple] = []
+        for raw_line in self._normalize_text_for_pdf(content).split("\n"):
+            stripped = raw_line.strip()
+            if not stripped:
+                blocks.append(("spacer", ""))
+                continue
+            if re.fullmatch(r"-{3,}", stripped):
+                blocks.append(("rule", ""))
+                continue
+            if stripped.startswith("#### "):
+                blocks.append(("heading4", self._strip_markdown_for_pdf(stripped[5:])))
+                continue
+            if stripped.startswith("### "):
+                blocks.append(("heading3", self._strip_markdown_for_pdf(stripped[4:])))
+                continue
+            if stripped.startswith("## "):
+                blocks.append(("heading2", self._strip_markdown_for_pdf(stripped[3:])))
+                continue
+            if stripped.startswith("# "):
+                blocks.append(("title", self._strip_markdown_for_pdf(stripped[2:])))
+                continue
+            if stripped.startswith("> "):
+                blocks.append(("quote", self._strip_markdown_for_pdf(stripped[2:])))
+                continue
+            if re.match(r"^\d+\.\s+", stripped):
+                blocks.append(("list", self._strip_markdown_for_pdf(stripped)))
+                continue
+            if stripped.startswith("- ") or stripped.startswith("* "):
+                blocks.append(("bullet", self._strip_markdown_for_pdf(f"• {stripped[2:]}")))
+                continue
+            blocks.append(("body", self._strip_markdown_for_pdf(stripped)))
+        return blocks
 
     def _build_pdf_attachment(self, content: str) -> Optional[bytes]:
-        """Build a simple text-based PDF attachment for email delivery."""
+        """Build a readable PDF attachment for email delivery."""
         try:
+            from reportlab.lib import colors
             from reportlab.lib.pagesizes import A4
-            from reportlab.pdfbase import pdfmetrics
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
             from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-            from reportlab.pdfgen import canvas
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
         except ImportError:
             logger.warning("reportlab not installed, PDF attachment disabled")
             return None
 
         pdf_buffer = BytesIO()
-        page_width, page_height = A4
-        margin = 40
         font_name = "STSong-Light"
-        font_size = 11
-        line_height = 16
-        max_width = page_width - margin * 2
 
         try:
             pdfmetrics.registerFont(UnicodeCIDFont(font_name))
         except Exception:
-            # ReportLab may raise if the font has already been registered.
             pass
 
         safe_content = self._normalize_text_for_pdf(content)
-        pdf = canvas.Canvas(pdf_buffer, pagesize=A4)
-        pdf.setTitle("股票智能分析报告")
-        pdf.setAuthor(self._email_config.get('sender_name') or 'daily_stock_analysis')
-        pdf.setSubject("daily_stock_analysis 邮件报告附件")
-        pdf.setFont(font_name, font_size)
+        blocks = self._build_pdf_blocks(safe_content)
+        document = SimpleDocTemplate(
+            pdf_buffer,
+            pagesize=A4,
+            leftMargin=42,
+            rightMargin=42,
+            topMargin=42,
+            bottomMargin=42,
+            title="股票智能分析报告",
+            author=self._email_config.get('sender_name') or 'daily_stock_analysis',
+            subject="daily_stock_analysis 邮件报告附件",
+        )
 
-        y = page_height - margin
-        for paragraph in safe_content.split('\n'):
-            for line in self._wrap_pdf_line(paragraph, max_width, font_name, font_size):
-                if y < margin:
-                    pdf.showPage()
-                    pdf.setFont(font_name, font_size)
-                    y = page_height - margin
-                pdf.drawString(margin, y, line)
-                y -= line_height
-            y -= 4
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "PdfTitle",
+            parent=styles["Title"],
+            fontName=font_name,
+            fontSize=18,
+            leading=24,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=12,
+            wordWrap="CJK",
+        )
+        heading2_style = ParagraphStyle(
+            "PdfHeading2",
+            parent=styles["Heading2"],
+            fontName=font_name,
+            fontSize=14,
+            leading=20,
+            textColor=colors.HexColor("#0f172a"),
+            spaceBefore=8,
+            spaceAfter=6,
+            wordWrap="CJK",
+        )
+        heading3_style = ParagraphStyle(
+            "PdfHeading3",
+            parent=styles["Heading3"],
+            fontName=font_name,
+            fontSize=12.5,
+            leading=18,
+            textColor=colors.HexColor("#1f2937"),
+            spaceBefore=6,
+            spaceAfter=4,
+            wordWrap="CJK",
+        )
+        heading4_style = ParagraphStyle(
+            "PdfHeading4",
+            parent=styles["Heading4"],
+            fontName=font_name,
+            fontSize=11.5,
+            leading=17,
+            textColor=colors.HexColor("#374151"),
+            spaceBefore=4,
+            spaceAfter=3,
+            wordWrap="CJK",
+        )
+        body_style = ParagraphStyle(
+            "PdfBody",
+            parent=styles["BodyText"],
+            fontName=font_name,
+            fontSize=10.5,
+            leading=17,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=3,
+            wordWrap="CJK",
+        )
+        quote_style = ParagraphStyle(
+            "PdfQuote",
+            parent=body_style,
+            leftIndent=12,
+            textColor=colors.HexColor("#374151"),
+            borderPadding=4,
+        )
+        list_style = ParagraphStyle(
+            "PdfList",
+            parent=body_style,
+            leftIndent=10,
+        )
 
-        pdf.save()
+        style_map = {
+            "title": title_style,
+            "heading2": heading2_style,
+            "heading3": heading3_style,
+            "heading4": heading4_style,
+            "body": body_style,
+            "bullet": list_style,
+            "list": list_style,
+            "quote": quote_style,
+        }
+
+        story = []
+        for block_type, block_text in blocks:
+            if block_type == "spacer":
+                story.append(Spacer(1, 6))
+                continue
+            if block_type == "rule":
+                story.append(Spacer(1, 4))
+                story.append(HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#d1d5db")))
+                story.append(Spacer(1, 6))
+                continue
+            if not block_text:
+                continue
+            story.append(Paragraph(escape(block_text), style_map[block_type]))
+
+        if not story:
+            story.append(Paragraph("暂无可用报告内容。", body_style))
+
+        document.build(story)
         return pdf_buffer.getvalue()
 
     def _attach_pdf_if_needed(self, msg: MIMEMultipart, markdown_content: Optional[str]) -> None:

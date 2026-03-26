@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import List
 
 from src.core.intraday_market_schedule import IntradayMarketSlot
@@ -32,6 +33,8 @@ class IntradayDigestContext:
     auction_limit_ups: List[IntradayDigestEntry] = field(default_factory=list)
     daily_limit_ups: List[IntradayDigestEntry] = field(default_factory=list)
     news_highlights: List[str] = field(default_factory=list)
+    generated_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M"))
+    slot_origin: str = "auto"
     investment_direction: str = ""
     previous_day_comparison: str = ""
     weekly_summary: str = ""
@@ -57,6 +60,10 @@ def render_intraday_digest_markdown(context: IntradayDigestContext) -> str:
     )
 
     lines: List[str] = [heading, ""]
+    meta_line = f"> 汇总时点: {slot.label} | 实际生成时间: {context.generated_at}"
+    if context.slot_origin == "manual":
+        meta_line += " | 手动指定时点"
+    lines.extend([meta_line, ""])
 
     if context.headline:
         lines.extend(["### 一、核心结论", context.headline, ""])

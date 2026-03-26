@@ -325,6 +325,22 @@ class TestEmailSender(unittest.TestCase):
         self.assertEqual(len(pdf_parts), 1)
         self.assertEqual(pdf_parts[0].get_filename(), "stock-analysis-report.pdf")
 
+    def test_build_pdf_attachment_returns_pdf_bytes_for_markdown(self):
+        cfg = _config(
+            email_sender="a@qq.com",
+            email_password="p",
+            email_receivers=["b@qq.com"],
+            email_attachment_format="pdf",
+        )
+        sender = EmailSender(cfg)
+
+        pdf_bytes = sender._build_pdf_attachment(
+            "## 2026-03-26 A股09:30 盘中综述\n\n### 一、核心结论\n资金流向集中在机器人与半导体。\n\n1. **龙头股**: 某某股份 | 竞价涨停\n"
+        )
+
+        self.assertIsInstance(pdf_bytes, bytes)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
 
 class TestAstrbotSender(unittest.TestCase):
     """Unit tests for AstrbotSender."""

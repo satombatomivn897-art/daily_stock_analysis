@@ -25,6 +25,8 @@ class IntradayMarketDigestRenderTestCase(unittest.TestCase):
         report = render_intraday_digest_markdown(
             IntradayDigestContext(
                 slot=slot,
+                generated_at="2026-03-26 12:21",
+                slot_origin="manual",
                 headline="A股开盘后情绪偏强，竞价资金向科技与机器人方向集中。",
                 capital_flow_summary="大盘主力净流入转正，电子与机器人概念居前。",
                 sector_leaders=[
@@ -42,6 +44,9 @@ class IntradayMarketDigestRenderTestCase(unittest.TestCase):
         self.assertIn("集合竞价观察", report)
         self.assertIn("竞价涨停 Top 10", report)
         self.assertNotIn("当日涨停 Top 20", report)
+        self.assertIn("汇总时点: 09:30", report)
+        self.assertIn("实际生成时间: 2026-03-26 12:21", report)
+        self.assertIn("手动指定时点", report)
 
     def test_cn_close_digest_includes_daily_limit_up_reason_section(self) -> None:
         slot = IntradayMarketSlot(
@@ -56,6 +61,7 @@ class IntradayMarketDigestRenderTestCase(unittest.TestCase):
         report = render_intraday_digest_markdown(
             IntradayDigestContext(
                 slot=slot,
+                generated_at="2026-03-26 15:01",
                 headline="A股收盘维持强势，短线情绪聚焦算力和机器人。",
                 capital_flow_summary="主力资金净流入集中在算力、消费电子和机器人链。",
                 sector_leaders=[
@@ -77,6 +83,8 @@ class IntradayMarketDigestRenderTestCase(unittest.TestCase):
         self.assertIn("涨停原因简析", report)
         self.assertIn("前一交易日对比", report)
         self.assertIn("本周总结", report)
+        self.assertIn("汇总时点: 15:00", report)
+        self.assertIn("实际生成时间: 2026-03-26 15:01", report)
 
 
 if __name__ == "__main__":
