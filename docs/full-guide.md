@@ -439,7 +439,28 @@ python main.py --workers 5            # 指定并发数
 
 ### GitHub Actions 定时
 
-编辑 `.github/workflows/daily_analysis.yml`:
+如果你要的是 **每日个股 + 大盘复盘**，可手动触发 `.github/workflows/daily_analysis.yml`。
+
+如果你要的是 **A 股盘中大盘综述**，推荐直接使用 `.github/workflows/intraday_cn_market_digest.yml`，默认执行时点如下：
+
+```yaml
+schedule:
+  - cron: '30 1 * * 1-5'   # 09:30
+  - cron: '30 2 * * 1-5'   # 10:30
+  - cron: '30 3 * * 1-5'   # 11:30
+  - cron: '30 5 * * 1-5'   # 13:30
+  - cron: '30 6 * * 1-5'   # 14:30
+  - cron: '0 7 * * 1-5'    # 15:00
+```
+
+盘中综述工作流特性：
+
+- 仅聚焦 A 股大盘，不执行个股定时分析
+- `09:30` 报告包含集合竞价观察与竞价涨停 Top 10
+- `15:00` 报告包含前一交易日对比、当日涨停 Top 20 与周五周度总结
+- 邮件默认按 PDF 附件发送
+
+如果你仍需要修改手动个股分析工作流，可编辑 `.github/workflows/daily_analysis.yml`：
 
 ```yaml
 schedule:

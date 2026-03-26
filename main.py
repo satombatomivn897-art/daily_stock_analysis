@@ -69,6 +69,7 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
+  python main.py --intraday-market-digest --intraday-region cn --intraday-slot 15:00
         '''
     )
 
@@ -125,6 +126,27 @@ def parse_arguments() -> argparse.Namespace:
         '--market-review',
         action='store_true',
         help='仅运行大盘复盘分析'
+    )
+
+    parser.add_argument(
+        '--intraday-market-digest',
+        action='store_true',
+        help='运行盘中大盘综述（支持 A 股 竞价/盘中/收盘版）'
+    )
+
+    parser.add_argument(
+        '--intraday-region',
+        type=str,
+        default='auto',
+        choices=['auto', 'cn', 'us'],
+        help='盘中大盘综述市场：auto/cn/us（手动测试时可指定）'
+    )
+
+    parser.add_argument(
+        '--intraday-slot',
+        type=str,
+        default='auto',
+        help='盘中大盘综述时点：auto/09:30/10:30/11:30/13:30/14:30/15:00 等'
     )
 
     parser.add_argument(
@@ -253,6 +275,59 @@ def _compute_trading_day_filter(
 
     should_skip_all = (not filtered_codes) and (effective_region or '') == ''
     return (filtered_codes, effective_region, should_skip_all)
+
+
+def _build_search_service_and_analyzer(config: Config):
+    """Initialize optional search service and analyzer for market-focused modes."""
+    from src.analyzer import GeminiAnalyzer
+    from src.search_service import SearchService
+
+    search_service = None
+    analyzer = None
+
+    if config.has_search_capability_enabled():
+        search_service = SearchService(
+            bocha_keys=config.bocha_api_keys,
+            tavily_keys=config.tavily_api_keys,
+            brave_keys=config.brave_api_keys,
+            serpapi_keys=config.serpapi_keys,
+            minimax_keys=config.minimax_api_keys,
+            searxng_base_urls=config.searxng_base_urls,
+            searxng_public_instances_enabled=config.searxng_public_instances_enabled,
+            news_max_age_days=config.news_max_age_days,
+            news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+        )
+
+    if config.gemini_api_key or config.openai_api_key:
+        analyzer = GeminiAnalyzer(api_key=config.gemini_api_key)
+        if not analyzer.is_available():
+            logger.warning("AI 分析器初始化后不可用，请检查 API Key 配置")
+            analyzer = None
+    else:
+        logger.warning("未检测到 API Key (Gemini/OpenAI)，将仅使用模板生成报告")
+
+    return search_service, analyzer
+
+
+def run_intraday_market_digest_mode(config: Config, args: argparse.Namespace) -> int:
+    """Run the intraday market digest workflow."""
+    from src.notification import NotificationService
+    from src.core.intraday_market_service import run_intraday_market_digest
+
+    logger.info("模式: 盘中大盘综述")
+    notifier = NotificationService()
+    search_service, analyzer = _build_search_service_and_analyzer(config)
+    reports = run_intraday_market_digest(
+        notifier=notifier,
+        analyzer=analyzer,
+        search_service=search_service,
+        region_override=getattr(args, "intraday_region", "auto"),
+        slot_override=getattr(args, "intraday_slot", "auto"),
+        send_notification=not args.no_notify,
+    )
+    if not reports:
+        logger.info("盘中大盘综述本次无可执行时段或无报告产出。")
+    return 0
 
 
 def run_full_analysis(
@@ -613,12 +688,14 @@ def main() -> int:
             )
             return 0
 
-        # 模式1: 仅大盘复盘
+        # 模式1: 盘中大盘综述
+        if getattr(args, 'intraday_market_digest', False):
+            return run_intraday_market_digest_mode(config, args)
+
+        # 模式2: 仅大盘复盘
         if args.market_review:
-            from src.analyzer import GeminiAnalyzer
             from src.core.market_review import run_market_review
             from src.notification import NotificationService
-            from src.search_service import SearchService
 
             # Issue #373: Trading day check for market-review-only mode.
             # Do NOT use _compute_trading_day_filter here: that helper checks
@@ -637,31 +714,7 @@ def main() -> int:
 
             logger.info("模式: 仅大盘复盘")
             notifier = NotificationService()
-
-            # 初始化搜索服务和分析器（如果有配置）
-            search_service = None
-            analyzer = None
-
-            if config.has_search_capability_enabled():
-                search_service = SearchService(
-                    bocha_keys=config.bocha_api_keys,
-                    tavily_keys=config.tavily_api_keys,
-                    brave_keys=config.brave_api_keys,
-                    serpapi_keys=config.serpapi_keys,
-                    minimax_keys=config.minimax_api_keys,
-                    searxng_base_urls=config.searxng_base_urls,
-                    searxng_public_instances_enabled=config.searxng_public_instances_enabled,
-                    news_max_age_days=config.news_max_age_days,
-                    news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
-                )
-
-            if config.gemini_api_key or config.openai_api_key:
-                analyzer = GeminiAnalyzer(api_key=config.gemini_api_key)
-                if not analyzer.is_available():
-                    logger.warning("AI 分析器初始化后不可用，请检查 API Key 配置")
-                    analyzer = None
-            else:
-                logger.warning("未检测到 API Key (Gemini/OpenAI)，将仅使用模板生成报告")
+            search_service, analyzer = _build_search_service_and_analyzer(config)
 
             run_market_review(
                 notifier=notifier,
@@ -672,7 +725,7 @@ def main() -> int:
             )
             return 0
 
-        # 模式2: 定时任务模式
+        # 模式3: 定时任务模式
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
             logger.info(f"每日执行时间: {config.schedule_time}")
@@ -699,7 +752,7 @@ def main() -> int:
             )
             return 0
 
-        # 模式3: 正常单次运行
+        # 模式4: 正常单次运行
         if config.run_immediately:
             run_full_analysis(config, args, stock_codes)
         else:

@@ -274,6 +274,15 @@ LITELLM_MODEL=openai/deepseek-chat
 > Docker 部署、定时任务配置请参考 [完整指南](docs/full-guide.md)
 > 桌面客户端打包请参考 [桌面端打包说明](docs/desktop-package.md)
 
+### A股盘中大盘综述（GitHub Actions）
+
+仓库额外提供了一个仅面向 **A 股大盘** 的盘中综述工作流：`.github/workflows/intraday_cn_market_digest.yml`。
+
+- 自动执行时点：北京时间 `09:30 / 10:30 / 11:30 / 13:30 / 14:30 / 15:00`
+- 报告内容：集合竞价观察、资金流向、行业强弱、领涨个股、`15:00` 收盘版的前一交易日对比与周度总结
+- 邮件形态：默认通过 `EMAIL_ATTACHMENT_FORMAT=pdf` 发送 PDF 附件
+- 旧的 `.github/workflows/daily_analysis.yml` 现在保留为**手动触发**入口，避免继续自动跑个股日报
+
 ## 📱 推送效果
 
 ### 决策仪表盘
