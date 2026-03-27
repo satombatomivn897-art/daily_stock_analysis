@@ -70,6 +70,7 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
   python main.py --intraday-market-digest --intraday-region cn --intraday-slot 15:00
+  python main.py --intraday-market-daemon --intraday-region cn
         '''
     )
 
@@ -135,6 +136,12 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        '--intraday-market-daemon',
+        action='store_true',
+        help='运行本机常驻盘中大盘综述调度器（不依赖 GitHub Actions 定时）'
+    )
+
+    parser.add_argument(
         '--intraday-region',
         type=str,
         default='auto',
@@ -147,6 +154,20 @@ def parse_arguments() -> argparse.Namespace:
         type=str,
         default='auto',
         help='盘中大盘综述时点：auto/09:30/10:30/11:30/13:30/14:30/15:00 等'
+    )
+
+    parser.add_argument(
+        '--intraday-grace-minutes',
+        type=int,
+        default=10,
+        help='本机盘中盯盘调度的迟到补救窗口（分钟），默认 10'
+    )
+
+    parser.add_argument(
+        '--intraday-poll-seconds',
+        type=int,
+        default=20,
+        help='本机盘中盯盘调度的轮询间隔（秒），默认 20'
     )
 
     parser.add_argument(
@@ -344,6 +365,50 @@ def run_intraday_market_digest_mode(config: Config, args: argparse.Namespace) ->
     )
     if not reports:
         logger.info("盘中大盘综述本次无可执行时段或无报告产出。")
+    return 0
+
+
+def run_intraday_market_daemon_mode(config: Config, args: argparse.Namespace) -> int:
+    """Run the self-hosted intraday digest daemon."""
+    from src.notification import NotificationService
+    from src.core.intraday_market_daemon import IntradayMarketDigestDaemon
+    from src.core.intraday_market_service import run_intraday_market_digest
+
+    region = getattr(args, "intraday_region", "cn")
+    if region == "auto":
+        region = "cn"
+
+    logger.info("模式: 本机常驻盘中大盘综述调度")
+    logger.info(
+        "参数: market=%s grace=%smin poll=%ss",
+        region,
+        getattr(args, "intraday_grace_minutes", 10),
+        getattr(args, "intraday_poll_seconds", 20),
+    )
+
+    def _run_slot(slot_label: str) -> bool:
+        latest_config = get_config()
+        notifier = NotificationService()
+        search_service, analyzer = _build_search_service_and_analyzer(
+            latest_config,
+            explicit_search_only=True,
+        )
+        reports = run_intraday_market_digest(
+            notifier=notifier,
+            analyzer=analyzer,
+            search_service=search_service,
+            region_override=region,
+            slot_override=slot_label,
+            send_notification=not args.no_notify,
+        )
+        return bool(reports)
+
+    daemon = IntradayMarketDigestDaemon(
+        region=region,
+        grace_minutes=getattr(args, "intraday_grace_minutes", 10),
+        poll_interval_seconds=getattr(args, "intraday_poll_seconds", 20),
+    )
+    daemon.run(_run_slot)
     return 0
 
 
@@ -705,11 +770,15 @@ def main() -> int:
             )
             return 0
 
-        # 模式1: 盘中大盘综述
+        # 模式1: 本机常驻盘中大盘综述调度
+        if getattr(args, 'intraday_market_daemon', False):
+            return run_intraday_market_daemon_mode(config, args)
+
+        # 模式2: 盘中大盘综述
         if getattr(args, 'intraday_market_digest', False):
             return run_intraday_market_digest_mode(config, args)
 
-        # 模式2: 仅大盘复盘
+        # 模式3: 仅大盘复盘
         if args.market_review:
             from src.core.market_review import run_market_review
             from src.notification import NotificationService
@@ -742,7 +811,7 @@ def main() -> int:
             )
             return 0
 
-        # 模式3: 定时任务模式
+        # 模式4: 定时任务模式
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
             logger.info(f"每日执行时间: {config.schedule_time}")
@@ -769,7 +838,7 @@ def main() -> int:
             )
             return 0
 
-        # 模式4: 正常单次运行
+        # 模式5: 正常单次运行
         if config.run_immediately:
             run_full_analysis(config, args, stock_codes)
         else:
