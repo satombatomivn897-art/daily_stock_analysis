@@ -127,13 +127,29 @@ jobs:
             echo "$LITELLM_CONFIG_YAML" > "$LITELLM_CONFIG"
           fi
 
-          SLOT="${{ github.event.inputs.slot || 'auto' }}"
+          INPUT_SLOT="${{ github.event.inputs.slot || '' }}"
+          SCHEDULE_EXPR="${{ github.event.schedule || '' }}"
+
+          if [ -n "$INPUT_SLOT" ]; then
+            SLOT="$INPUT_SLOT"
+          else
+            case "$SCHEDULE_EXPR" in
+              '30 1 * * 1-5') SLOT='09:30' ;;
+              '30 2 * * 1-5') SLOT='10:30' ;;
+              '30 3 * * 1-5') SLOT='11:30' ;;
+              '30 5 * * 1-5') SLOT='13:30' ;;
+              '30 6 * * 1-5') SLOT='14:30' ;;
+              '0 7 * * 1-5') SLOT='15:00' ;;
+              *) SLOT='auto' ;;
+            esac
+          fi
 
           echo "=========================================="
           echo "🚀 A股盘中大盘综述"
           echo "=========================================="
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "🧭 时点: $SLOT"
+          echo "🗓️ 调度表达式: ${SCHEDULE_EXPR:-manual}"
           echo "📎 邮件附件: PDF"
           echo "=========================================="
 
